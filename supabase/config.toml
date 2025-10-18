@@ -1,0 +1,4 @@
+project_id = "ompwzfouwmtfrmrxiiqr"
+
+[functions.download-music]
+verify_jwt = false
