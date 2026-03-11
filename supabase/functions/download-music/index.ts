@@ -2,114 +2,97 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-interface DownloadRequest {
-  url: string;
-  isPlaylist: boolean;
-}
-
-interface DownloadResponse {
-  success: boolean;
-  title: string;
-  downloadUrl?: string;
-  error?: string;
-  metadata?: {
-    duration: string;
-    thumbnail: string;
-    author: string;
-  };
-}
-
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { url, isPlaylist }: DownloadRequest = await req.json();
-    
-    console.log('Download request received:', { url, isPlaylist });
+    const { url } = await req.json();
 
     if (!url) {
-      throw new Error('URL is required');
+      throw new Error('URL-ul este necesar');
     }
 
-    // Validare URL YouTube
-    const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/;
-    if (!youtubeRegex.test(url)) {
-      throw new Error('URL invalid. Te rog să folosești un link YouTube valid.');
+    console.log('Processing download request for:', url);
+
+    // Use Cobalt API - free, no API key needed
+    const cobaltResponse = await fetch('https://api.cobalt.tools/api/json', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        url: url,
+        isAudioOnly: true,
+        aFormat: 'mp3',
+        filenamePattern: 'pretty',
+        dubLang: false,
+      }),
+    });
+
+    if (!cobaltResponse.ok) {
+      const errorText = await cobaltResponse.text();
+      console.error('Cobalt API error:', cobaltResponse.status, errorText);
+      throw new Error('Serviciul de conversie nu este disponibil momentan. Încearcă din nou.');
     }
 
-    // Extract video ID from URL
-    let videoId = '';
-    if (url.includes('youtu.be/')) {
-      videoId = url.split('youtu.be/')[1]?.split('?')[0] || '';
-    } else if (url.includes('youtube.com')) {
-      const urlParams = new URLSearchParams(new URL(url).search);
-      videoId = urlParams.get('v') || '';
+    const cobaltData = await cobaltResponse.json();
+    console.log('Cobalt response:', JSON.stringify(cobaltData));
+
+    if (cobaltData.status === 'error') {
+      throw new Error(cobaltData.text || 'Eroare la procesarea link-ului');
     }
 
-    if (!videoId) {
-      throw new Error('Nu am putut extrage ID-ul video din URL.');
+    // Cobalt returns a URL to the converted file
+    const downloadUrl = cobaltData.url;
+    if (!downloadUrl) {
+      throw new Error('Nu s-a putut obține link-ul de descărcare');
     }
 
-    console.log('Video ID extracted:', videoId);
-
-    // Folosim ytdl API pentru a obține informații despre video
-    // Nota: Acesta este un exemplu. Pentru producție, ai nevoie de un API key sau serviciu plătit
-    const infoUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
-    const infoResponse = await fetch(infoUrl);
-    
-    if (!infoResponse.ok) {
-      throw new Error('Nu am putut obține informații despre video.');
-    }
-
-    const videoInfo = await infoResponse.json();
-    
-    console.log('Video info retrieved:', videoInfo);
-
-    // Pentru demo, returnăm informațiile video
-    // În producție, aici ar trebui să procesezi și să returnezi link-ul de descărcare real
-    const response: DownloadResponse = {
-      success: true,
-      title: videoInfo.title || 'Unknown Title',
-      // În producție, aici ar fi URL-ul real de descărcare
-      downloadUrl: `https://www.youtube.com/watch?v=${videoId}`,
-      metadata: {
-        duration: '0:00',
-        thumbnail: videoInfo.thumbnail_url || '',
-        author: videoInfo.author_name || 'Unknown',
+    // Get video title from YouTube oEmbed (best effort)
+    let title = 'Melodie';
+    try {
+      // Extract video ID
+      let videoId = '';
+      if (url.includes('youtu.be/')) {
+        videoId = url.split('youtu.be/')[1]?.split('?')[0] || '';
+      } else if (url.includes('youtube.com')) {
+        const urlObj = new URL(url);
+        videoId = urlObj.searchParams.get('v') || '';
       }
-    };
+      if (videoId) {
+        const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+        if (oembedRes.ok) {
+          const info = await oembedRes.json();
+          title = info.title || title;
+        }
+      }
+    } catch (e) {
+      console.log('Could not fetch title:', e);
+    }
 
     return new Response(
-      JSON.stringify(response),
-      { 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200 
-      }
+      JSON.stringify({
+        success: true,
+        title,
+        downloadUrl,
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error) {
-    console.error('Error in download-music function:', error);
-    
-    const errorMessage = error instanceof Error ? error.message : 'A apărut o eroare la procesarea cererii.';
-    
-    const errorResponse: DownloadResponse = {
-      success: false,
-      title: '',
-      error: errorMessage,
-    };
-
+    console.error('Error:', error);
     return new Response(
-      JSON.stringify(errorResponse),
-      { 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400 
-      }
+      JSON.stringify({
+        success: false,
+        error: error instanceof Error ? error.message : 'Eroare necunoscută',
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
     );
   }
 });
