@@ -23,11 +23,10 @@ const Index = () => {
     setDownloads((prev) => [...prev, newDownload]);
 
     try {
-      // Update status to downloading
       setDownloads((prev) =>
         prev.map((d) =>
           d.id === newDownload.id
-            ? { ...d, status: "downloading", progress: 20 }
+            ? { ...d, status: "downloading", progress: 30 }
             : d
         )
       );
@@ -39,50 +38,60 @@ const Index = () => {
       if (error) throw error;
       if (!data.success) throw new Error(data.error || 'Descărcarea a eșuat');
 
-      // Update progress
       setDownloads((prev) =>
         prev.map((d) =>
           d.id === newDownload.id
-            ? { ...d, title: data.title, progress: 60 }
+            ? { ...d, title: data.title, progress: 70 }
             : d
         )
       );
 
-      // Trigger real file download in browser
-      const downloadUrl = data.downloadUrl;
-      if (downloadUrl) {
+      if (data.downloadUrl) {
+        // Real download available
         setDownloads((prev) =>
           prev.map((d) =>
-            d.id === newDownload.id ? { ...d, progress: 80 } : d
+            d.id === newDownload.id ? { ...d, progress: 90 } : d
           )
         );
 
-        // Create a temporary link to trigger download
         const link = document.createElement('a');
-        link.href = downloadUrl;
+        link.href = data.downloadUrl;
         link.download = `${data.title || 'melodie'}.mp3`;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+
+        setDownloads((prev) =>
+          prev.map((d) =>
+            d.id === newDownload.id
+              ? { ...d, progress: 100, status: "completed" }
+              : d
+          )
+        );
+
+        toast({
+          title: "Descărcare completă!",
+          description: `${data.title} — verifică folderul Downloads.`,
+        });
+      } else if (data.noApiKey) {
+        // No API key configured - inform user
+        setDownloads((prev) =>
+          prev.map((d) =>
+            d.id === newDownload.id
+              ? { ...d, progress: 100, status: "completed" }
+              : d
+          )
+        );
+
+        toast({
+          title: `🎵 ${data.title}`,
+          description: `De: ${data.metadata?.author || 'Necunoscut'} — Descărcarea reală necesită configurarea unui API key (RapidAPI).`,
+        });
       }
 
-      // Mark as completed
-      setDownloads((prev) =>
-        prev.map((d) =>
-          d.id === newDownload.id
-            ? { ...d, progress: 100, status: "completed" }
-            : d
-        )
-      );
-
-      toast({
-        title: "Descărcare completă!",
-        description: `${data.title} — verifică folderul Downloads.`,
-      });
-
-      // Move to history after a delay
+      // Move to history
       setTimeout(() => {
         setDownloads((prev) => prev.filter((d) => d.id !== newDownload.id));
         setHistory((prev) => [
@@ -91,6 +100,7 @@ const Index = () => {
             title: data.title || "Melodie",
             url,
             completedAt: new Date(),
+            fileSize: data.fileSize,
           },
           ...prev,
         ]);
@@ -130,7 +140,6 @@ const Index = () => {
   return (
     <div className="min-h-screen py-8 px-4">
       <div className="max-w-4xl mx-auto space-y-8">
-        {/* Header */}
         <div className="text-center space-y-4 mb-12">
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-r from-primary via-secondary to-accent mb-4 animate-wave">
             <Headphones className="w-10 h-10 text-background" />
@@ -143,16 +152,10 @@ const Index = () => {
           </p>
         </div>
 
-        {/* Download Form */}
         <DownloadForm onDownload={handleDownload} />
-
-        {/* Active Downloads */}
         <DownloadProgress downloads={downloads} />
-
-        {/* Download History */}
         <DownloadHistory history={history} onClear={handleClearHistory} />
 
-        {/* Footer */}
         <div className="text-center pt-8 pb-4">
           <p className="text-sm text-muted-foreground">
             Creat cu ❤️ pentru iubitorii de muzică • Fișierele se salvează în folderul <strong>Downloads</strong>

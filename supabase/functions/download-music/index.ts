@@ -17,70 +17,85 @@ serve(async (req) => {
       throw new Error('URL-ul este necesar');
     }
 
-    console.log('Processing download request for:', url);
-
-    // Use Cobalt API - free, no API key needed
-    const cobaltResponse = await fetch('https://api.cobalt.tools/api/json', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify({
-        url: url,
-        isAudioOnly: true,
-        aFormat: 'mp3',
-        filenamePattern: 'pretty',
-        dubLang: false,
-      }),
-    });
-
-    if (!cobaltResponse.ok) {
-      const errorText = await cobaltResponse.text();
-      console.error('Cobalt API error:', cobaltResponse.status, errorText);
-      throw new Error('Serviciul de conversie nu este disponibil momentan. Încearcă din nou.');
+    // Validate YouTube URL
+    const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/;
+    if (!youtubeRegex.test(url)) {
+      throw new Error('URL invalid. Folosește un link YouTube valid.');
     }
 
-    const cobaltData = await cobaltResponse.json();
-    console.log('Cobalt response:', JSON.stringify(cobaltData));
-
-    if (cobaltData.status === 'error') {
-      throw new Error(cobaltData.text || 'Eroare la procesarea link-ului');
+    // Extract video ID
+    let videoId = '';
+    if (url.includes('youtu.be/')) {
+      videoId = url.split('youtu.be/')[1]?.split('?')[0] || '';
+    } else if (url.includes('youtube.com')) {
+      const urlObj = new URL(url);
+      videoId = urlObj.searchParams.get('v') || '';
     }
 
-    // Cobalt returns a URL to the converted file
-    const downloadUrl = cobaltData.url;
-    if (!downloadUrl) {
-      throw new Error('Nu s-a putut obține link-ul de descărcare');
+    if (!videoId) {
+      throw new Error('Nu am putut extrage ID-ul video din URL.');
     }
 
-    // Get video title from YouTube oEmbed (best effort)
-    let title = 'Melodie';
-    try {
-      // Extract video ID
-      let videoId = '';
-      if (url.includes('youtu.be/')) {
-        videoId = url.split('youtu.be/')[1]?.split('?')[0] || '';
-      } else if (url.includes('youtube.com')) {
-        const urlObj = new URL(url);
-        videoId = urlObj.searchParams.get('v') || '';
-      }
-      if (videoId) {
-        const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
-        if (oembedRes.ok) {
-          const info = await oembedRes.json();
-          title = info.title || title;
+    // Get video info
+    const oembedRes = await fetch(
+      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
+    );
+
+    if (!oembedRes.ok) {
+      throw new Error('Nu am putut obține informații despre video.');
+    }
+
+    const videoInfo = await oembedRes.json();
+
+    // Check if RAPIDAPI_KEY is configured for real downloads
+    const rapidApiKey = Deno.env.get('RAPIDAPI_KEY');
+
+    if (rapidApiKey) {
+      // Real download via RapidAPI
+      console.log('Using RapidAPI for download...');
+      
+      const apiResponse = await fetch(
+        `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`,
+        {
+          headers: {
+            'X-RapidAPI-Key': rapidApiKey,
+            'X-RapidAPI-Host': 'youtube-mp36.p.rapidapi.com',
+          },
         }
+      );
+
+      if (!apiResponse.ok) {
+        throw new Error('Eroare la serviciul de conversie.');
       }
-    } catch (e) {
-      console.log('Could not fetch title:', e);
+
+      const apiData = await apiResponse.json();
+
+      if (apiData.status === 'ok' && apiData.link) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            title: apiData.title || videoInfo.title,
+            downloadUrl: apiData.link,
+            fileSize: apiData.filesize ? `${(apiData.filesize / 1024 / 1024).toFixed(1)} MB` : undefined,
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } else {
+        throw new Error(apiData.msg || 'Conversia a eșuat. Încearcă alt video.');
+      }
     }
 
+    // No API key - return info only
     return new Response(
       JSON.stringify({
         success: true,
-        title,
-        downloadUrl,
+        title: videoInfo.title || 'Unknown',
+        downloadUrl: null,
+        noApiKey: true,
+        metadata: {
+          thumbnail: videoInfo.thumbnail_url,
+          author: videoInfo.author_name,
+        },
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
